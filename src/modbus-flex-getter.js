@@ -20,7 +20,7 @@ module.exports = function (RED) {
   const mbIOCore = require('./core/modbus-io-core')
   const internalDebugLog = require('debug')('contribModbus:flex:getter')
 
-  function ModbusFlexGetter (config) {
+  function ModbusFlexGetter(config) {
     RED.nodes.createNode(this, config)
 
     this.name = config.name
@@ -41,6 +41,7 @@ module.exports = function (RED) {
 
     this.delayOnStart = config.delayOnStart
     this.startDelayTime = parseInt(config.startDelayTime) || 10
+    this.selectServerFromInput = config.selectServerFromInput; // New property
 
     const node = this
     node.bufferMessageList = new Map()
@@ -142,7 +143,7 @@ module.exports = function (RED) {
       }
     }
     /* istanbul ignore next */
-    function verboseWarn (logMessage) {
+    function verboseWarn(logMessage) {
       if (RED.settings.verbose && node.showWarnings) {
         node.warn('Flex-Getter -> ' + logMessage)
       }
@@ -186,26 +187,42 @@ module.exports = function (RED) {
 
     node.on('input', function (msg) {
       if (mbBasics.invalidPayloadIn(msg)) {
-        /* istanbul ignore next */
         verboseWarn('Invalid message on input.')
         return
       }
       if (node.isNotReadyForInput()) {
-        /* istanbul ignore next */
         verboseWarn('Inject while node is not ready for input.')
         return
       }
       if (modbusClient.isInactive()) {
-        /* istanbul ignore next */
         verboseWarn('You sent an input to inactive client. Please use initial delay on start or send data more slowly.')
         return
+      }
+
+      // Check if the server should be selected from the input message
+      if (node.selectServerFromInput && msg.payload.server) {
+        const dynamicModbusClient = RED.nodes.getNode(msg.payload.server);
+        if (!dynamicModbusClient) {
+          node.error('Invalid Modbus client specified in the input message', msg);
+          return;
+        }
+
+        // Deregister from the old modbusClient
+        if (modbusClient) {
+          modbusClient.deregisterForModbus(node.id);
+        }
+
+        // Register with the new modbusClient
+        modbusClient = dynamicModbusClient;
+        modbusClient.registerForModbus(node);
+        mbBasics.initModbusClientEvents(node, modbusClient);
       }
 
       messageQueue.push(msg)
       processNextMessage()
     })
 
-    function processNextMessage () {
+    function processNextMessage() {
       if (messageQueue.length === 0) {
         node.emit('modbusFlexGetterNodeDone')
         return
